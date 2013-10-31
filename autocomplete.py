@@ -2,60 +2,63 @@ import sublime, sublime_plugin
 import os
 import re
 from threading import Thread
+import time
 
 
-class SassAutocomplete(sublime_plugin.EventListener):
-
+class ScssAutocomplete(sublime_plugin.EventListener):
+	last_update = 0
 	def on_query_completions(self, view, prefix, locations):
-		if ".scss" not in sublime.active_window().active_view().file_name():
-			return
-		if 0 == len(MainIndex.index) and not Indexer.is_running:
-			Indexer().start()
-			return []
 
-		return MainIndex.index
+		file_name = view.file_name()
+		if ".scss" not in file_name:
+			return None
 
-	def on_post_save_async(self, view):
-		if ".scss" in view.file_name():
-			Indexer().start()
+		indexer = Indexer()
+		# сканим не раньше чем раз в n сек
+		if (time.time() - ScssAutocomplete.last_update) > 4:
+			print("reindex")
+			indexer.update_index(file_name)
+			ScssAutocomplete.last_update = time.time()
 
+		return indexer.get_index(file_name)
 
-class MainIndex(object):
+class Indexer(object):
 	index = []
 
+	def get_index(self, file_name):
+		return Indexer.index
 
-class Indexer(Thread):
-	is_running = False
-	def run(self):
-		MainIndex.index = []
-		Indexer.is_running = True
-		root_folder = sublime.active_window().folders()[0] + "/"
-		files = self.read_folder(root_folder)
+	def update_index(self, file_name):
+		Indexer.index = []
 
-		for file_name in files:
-			if ".scss" in file_name:
-				content = open(file_name, "r").read()
-				# print(content)
-				matches = list(set(re.findall("\$[\w\-\d]+", content)))
-				for match in matches:
-					# match = match[0:len(match)]
-					MainIndex.index.append(
-						(
-							match,
-							match.replace("$", "\$"))
-					)
-		MainIndex.index.sort()
-		MainIndex.index = list(set(MainIndex.index))
+		self.scan_file(file_name)
 
-		Indexer.is_running = False
+	def append_to_index(self, item):
 
-	def read_folder(self, folder):
-		files = []
-		for file_name in os.listdir(folder):
-			if "." != file_name and ".." != file_name and os.path.isdir(folder + file_name):
-				# print("trye read " + folder + file_name)
-				files = files + self.read_folder(folder + file_name + "/")
+		placement = item.strip().replace("$", "\$")
+		item = "scss: " + item
+		tuple_item = (item, placement)
+
+		if tuple_item not in Indexer.index:
+			Indexer.index.append(tuple_item)
+
+	def scan_file(self, file_name):
+		print("scanning %s" % file_name)
+		content = open(file_name, "r").read()
+		#+[^:]+:[^;]+;
+		matches = re.findall("\$[\w\-\d]+|\@import\s+[\'\"][^\"\']+[\'\"]", content)
+		data = []
+		for match in matches:
+			if "@import" in match:
+				child_file_name = match.replace("@import", "").replace("\"", "").replace("'", "").strip()
+
+				if "/" != child_file_name[0:1]:
+					child_file_name = os.path.dirname(file_name) + "/" + child_file_name
+
+				child_file_name = child_file_name + ".scss"
+
+				self.scan_file(child_file_name)
 			else:
-				if ".scss" in file_name:
-					files.append(folder + file_name)
-		return files
+				self.append_to_index(match)
+
+		return data
